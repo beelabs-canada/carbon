@@ -9,22 +9,36 @@ sub new
 	return bless [ Carbon::Enviroment->new ], shift;
 }
 
-
 sub run
 {
 	my ( $self ) = shift;
-	
-	foreach my $instruction ( $self->[0]->instructions )
+
+	foreach my $action ( $self->[0]->actions )
 	{		
-		my ( $action ) = keys %$instruction;
+		my ( $task ) = keys $action;
 		
-		if ( lc( $instruction->{ $action }->{'target'} ) eq $self->[0]->os )
+		my $target = ( exists $action->{ $task }->{'target'} )
+				? delete $action->{ $task }->{'target'}
+				: undef;
+		
+		if ( ! defined $target )
 		{
-			my $details = $instruction->{ $action };
-			dd $details;
+			$self->exec( ucfirst( $task ), $action->{ $task } );
+			continue;
 		}
-		
+				
+		if ($self->[0]->os =~ m/\b$target\b/ )
+		{
+			$self->exec( ucfirst( $task ), $action->{ $task } );
+		}
 	}
+}
+
+sub exec
+{
+	my( $self, $task, $props ) = @_;
+
+	return "Carbon::$task"->new( $props )->do( $self->[0]->basedir );	
 }
 
 
@@ -43,20 +57,83 @@ sub run
 package Carbon::Enviroment;
 
 use YAML::Tiny;
+use Path::Tiny;
+
+use constant { INSTRUCTS => 0, OS => 1, BASEDIR => 2 };
 
 sub new {
-	bless [
-		( -e $0.'.yml' ) ? YAML::Tiny->read( $0.'.yml' )->[0] : []
+	return bless [
+		( -e $0.'.yml' ) ? YAML::Tiny->read( $0.'.yml' )->[0] : [],
+		"$^O",
+		path($0)->parent
 	], shift;
 }
 
-sub instructions { @{ shift->[0] } }
-sub os { "$^O"; }
+sub actions { @{ shift->[INSTRUCTS] } }
+sub basedir { shift->[BASEDIR] }
+sub os { shift->[OS] }
+
 
 # #######################################
 # # CARBON::FETCH
 # #######################################
-package Carbon::Fetch
+package Carbon::Pluck;
+
+use HTTP::Tiny;
+use Path::Tiny;
+use File::Basename;
+use Archive::Extract;
+use Data::Dmp;
+
+sub new
+{
+	my ($class, $props, $basedir ) = @_;
+	
+	return bless [
+		HTTP::Tiny->new( agent => 'Carbon Task Agent v1.*', timeout => 20, %{ delete $props->{'http'} } ),
+		$props
+	], $class;
+}
+
+sub do
+{
+	my ( $self, $basedir ) = @_;
+	
+	my ( $http, $uri, $temp ) = (
+		$self->[0],
+		$self->[1]->{'uri'},
+		Path::Tiny->tempdir
+	);
+	
+	my $archive = $temp->child( basename( $uri ) );
+	
+	$http->mirror( $uri, $archive->stringify );
+	
+	my ( $files ) = $self->extract( $archive );
+	
+	foreach my $resource ( $self->resources )
+	{
+		my ( $from ) = grep { /$resource->{from}$/ } @$files;
+				
+		$archive->sibling( $from )->copy( 
+				$basedir->child( $resource->{to} )->touchpath->absolute->stringify
+		);
+	}
+
+}
+sub resources { @{ shift->[1]->{'resources'} } }
+
+sub extract
+{
+	my ( $self, $archive ) = @_;
+	
+	my $ae = Archive::Extract->new( archive => $archive->stringify );
+	
+	$ae->extract( to => $archive->parent->stringify );
+	
+	return $ae->files;
+	
+}
 
 
 

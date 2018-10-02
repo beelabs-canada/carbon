@@ -2,19 +2,19 @@
 - pluck:
     target: darwin
     uri: https://github.com/jgm/pandoc/releases/download/2.3.1/pandoc-2.3.1-macOS.zip
-    resource:
+    resources:
         - from: bin/pandoc
-          to: vendor/pandoc/darwin/pandoc
+          to: ../vendor/pandoc/darwin/pandoc
 - pluck:
     target: win
     uri: https://github.com/jgm/pandoc/releases/download/2.3.1/pandoc-2.3.1-windows-x86_64.zip
-    resource:
+    resources:
         - from: bin/pandoc.exe
           to: vendor/pandoc/win/pandoc.exe
 - pluck:
     target: linux
     uri: https://github.com/jgm/pandoc/releases/download/2.3.1/pandoc-2.3.1-linux.tar.gz
-    resource:
+    resources:
         - from: bin/pandoc.exe
           to: vendor/pandoc/linux/pandoc
           
