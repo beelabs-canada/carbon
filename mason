@@ -1,0 +1,342 @@
+#!/usr/bin/env perl
+
+use common::sense;
+no warnings 'experimental::smartmatch';
+
+use Path::Tiny qw/path/;
+use DBI;
+
+
+# ===================================================================
+# = INITIALIZATION                                                  =
+# ===================================================================
+# lets get the arguements passed
+my @args = @ARGV;
+
+
+usage() if ( scalar( @args ) < 1 || grep( /^help$/i, @args ) );
+
+# ===================================================================
+# = CONFIG                                                       =
+# ===================================================================
+
+my ( $base, $command, @params ) = ( path($0)->parent->absolute, shift( @args), @args );
+
+my ( $docroot , $dbroot, $mason ) = (
+    $base->child( ( scalar( @params ) > 1 ) ? $params[1] : 'public' ),
+    $base->child('db'),
+    $base->child('.mason')
+);
+
+# ===================================================================
+# = DASHBOARD.                                                      =
+# ===================================================================
+given ($command) {
+	
+    # DB
+    when( /^db:make$/ ) {
+        database( @params );
+    }
+    when( /^db:truncate$/ ) {
+        refresh( @params );
+    }
+    # Migrate
+    when( /^migration:make$/ ) {
+        sqlfile( @params );
+    }
+    when( /^migration:run$/ ) {
+        migrate( @params );
+    }
+    # Console
+    when( /^console:make$/ ) {
+        console( @params );
+    }
+    # Route
+    when( /^route:make$/ ) {
+        route( @params );
+    }
+    when( /^route:silence$/ ) {
+        silence( @params);
+    }
+    
+	default {
+		usage();
+	}
+	
+}
+
+
+#--------------------------------------------------------------------------#
+# Helper functions
+#--------------------------------------------------------------------------#
+
+sub usage
+{
+	cls();
+	
+	say join( "\n", (
+	"# Mason v1.0",
+	"-------------------------------------------------------------",
+    "Usage: perl mason [(route|db|console):*] [*] [private|public]",
+	"options:",
+    "   [help]",
+	"       help - this help screen",
+	"   [route]",
+	"       route:make - create a route",
+    "       route:silence - make a specific route not available to browsers (404)",
+	"   [database]",
+    "       db:make - create a database",
+	"       db:truncate - truncate the database and re-run migrations",
+    "   [migration]",
+    "       migration:make - create blank migration file",
+    "       migration:run - execute the database migrations",
+    "   [console]",
+    "       console:make - create a console only route"
+	));
+}
+
+#pod =construct route:make
+#pod
+#pod     perl mason route:make <path/to/route>
+#pod
+#pod Creates a route in the public/private folder to create logic
+#pod =cut
+sub route
+{
+	my ( $name, @params  ) = @_;
+    
+    my $route = $docroot->child( lc( $name ) );
+	
+	if ( $route->child( 'index.cgi' )->exists )
+	{
+        say '   [route:make] file '.lc( $route ).'/index.cgi already exists [aborting]';
+		return;
+	}
+    
+    # lets generate the core files
+    generate( $route );
+    
+    say '   [make:route] '.lc( $route ).'/index.cgi created (OK)';
+    
+	return;
+}
+
+#pod =construct db:make
+#pod
+#pod     perl mason db:make <path/to/route>
+#pod
+#pod Creates an empty SQLite database
+#pod =cut
+sub database
+{
+    my ( $name, @params  ) = @_;
+
+    my $dbfile = $dbroot->child( lc( $name ) )->child( 'database.sqlite' ) ;
+    
+	if ( $dbfile->exists )
+	{
+		say "   [make:db] error - database already exists (FAIL).. did you mean 'migrate:refresh $name' ?";
+        return;
+	}
+
+    $dbfile->touchpath->sibling('migration.0.sql')->touch;
+
+    say '   [database] created .. db/'.lc($name).'/database.sqlite';
+
+    return;
+}
+
+#pod =construct db:migrate
+#pod
+#pod     perl mason db:migrate <name/of/db>
+#pod
+#pod Migrates the migration.[0-9]*.sql files to the named SQLite database
+#pod =cut
+sub migrate
+{
+    
+	my ( $name, @params  ) = @_;
+    
+    my $dbfile = $dbroot->child( lc($name) )->child( 'database.sqlite' );
+    
+	if ( ! $dbfile->exists )
+	{
+		say "   [migrate:db] error - no database was found (FAIL).. maybe run 'make:database $name' ?";
+        return;
+	}
+        
+    my $dbh = DBI->connect( "dbi:SQLite:dbname=$dbfile","","" );
+    
+	say "   [migrate:db] running migrations files for - $name";
+        
+    my @migrations = $dbfile->parent->children( qr/^migration\.(.*)\.sql$/ );
+    
+   foreach my $file ( sort @migrations ) {
+       
+       print "   [parsing] SQL ( ".$file. " ) ...";
+       
+       my $sql = path( $file )->slurp_utf8;
+
+       if ( $sql !~ /\S/ )
+       {
+           print " no SQL found (FAIL)\n";
+           continue;
+       }
+
+       $dbh->do( _parseSQL( $sql ) );
+
+       print " executed (OK)\n";
+    }
+    	
+}
+
+#pod =construct db:refresh
+#pod
+#pod     perl mason db:refresh <path/to/route>
+#pod
+#pod Truncates the database and re-runs the migration files
+#pod =cut
+sub refresh
+{
+    my ( $name, @params  ) = @_;
+    
+    my $dbfile = $dbroot->child( lc($name) )->child( 'database.sqlite' );
+    
+
+    if ( $dbfile->exists )
+    {
+        $dbfile->remove;
+    }
+
+    $dbfile->touchpath;
+
+    say "   [migrate:refresh] truncated the database - $name";
+
+    migrate( $name );
+}
+
+#pod =construct migration:make
+#pod
+#pod     perl mason db:refresh <path/to/route>
+#pod
+#pod Truncates the database and re-runs the migration files
+#pod =cut
+sub sqlfile
+{
+    my ( $name, $idx ) = ( shift , 0 );
+    
+    my $dbroot = $dbroot->child( lc($name) );
+    
+    my $sqlfile = 'migration.'.scalar( $dbroot->children( qr/^migration\.(.*)\.sql$/ ) ).'.sql' ;
+    
+    $dbroot->child( $sqlfile )->touchpath;
+
+    say "   [make] created a new migration file (".$sqlfile.")"
+}
+
+
+# _parseSQL - remove SQL comments from SQL files
+# @param <String> SQL text
+# @returns <String> cleansed SQL text
+sub _parseSQL
+{
+    my ( $sql ) = @_;
+    # remove comments
+    #$sql =~ s/((?:\/\*(?:[^*]|(?:\*+[^*\/]))*\*+\/)|(?:\/\/.*))//g;
+    $sql =~ s#("(""|[^"])*")|('(''|[^'])*')|(--[^\n\r]*)|(\/\*[\w\W]*?(?=\*\/)\*\/)##g;
+    $sql =~ s/\n+/ /g;
+    $sql =~ s/\s+/ /g;
+    return _trim( $sql );
+}
+
+# _trimL - remove leading and ending space
+# @param <String> text
+# @returns <String> text
+sub  _trim
+{ 
+    my $s = shift; 
+    $s =~ s/^\s+|\s+$//g; 
+    return $s
+};
+
+#pod =construct route:silence
+#pod
+#pod     perl mason route:silence <path/to/route>
+#pod
+#pod  Makes a specific route not available to browsers (404)
+#pod =cut
+sub silence
+{
+    my ( $name, $type ) = @_;
+
+    my $type = ( $type ) ? $type : 'route';
+
+    my $silence = $docroot->child( lc($name) )->child('.htaccess') ;
+
+    if ( $silence->exists )
+    {
+        $silence->move( $silence->sibling( '.htaccess.'.time.'.bkp' )  );
+    }
+
+    $silence->touchpath->spew_utf8(  $mason->child( 'silence.tmpl' )->slurp_utf8   );
+
+    say '   ['.$type.'] silenced .. public/'.lc($name);
+
+    return;
+}
+
+sub console
+{
+    my ( $name, @params  ) = @_;
+
+    my $route = $docroot->child( lc($name) );
+
+    if ( $route->child('index.cgi')->exists )
+    {
+        say '   [console] error index.cgi already exists (FAIL).. did you mean "perl mason route:silence '.$route.'"?';
+        return;
+    }
+    
+    # lets generate the core files
+    generate( $route, 'console.tmpl', 'config.tmpl' );
+
+    say '   [console] created .. public/'.lc($name);
+
+    return silence( $name, 'console' );
+
+}
+
+
+# # ========================
+# # = COMMAND LINE HELPERS =
+# # ========================
+
+#  cls - clears the terminal window
+# @returns void
+sub cls
+{
+    my $cmd = (  $^O eq 'MSWin32' ) ? 'cls' : 'clear';
+    system( $cmd );
+}
+
+#  generate - creates index.cgi and index.yaml in route locations
+# @param - route <Path::Tiny> route to add the existing files
+# @returns - route
+sub generate
+{
+    
+    my $route = shift;
+    
+    my @templates = ( @_ ) ? @_ : ( 'route.tmpl', 'config.tmpl' );
+    
+    my  ( $template, $ini ) =  map { $mason->child( $_ )->slurp_utf8 } @templates ;
+	
+	# lets create the index file
+	$route->child( 'index.cgi' )->touchpath->spew_utf8( $template );
+	$route->child( 'index.yaml' )->touchpath->spew_utf8( $ini );
+    
+    return $route;
+}
+
+
+#
