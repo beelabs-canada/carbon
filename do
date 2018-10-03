@@ -59,14 +59,15 @@ sub exec {
 package Carbon::Enviroment;
 
 
-use YAML::Tiny;
+use YAML::XS 'LoadFile';
 use Path::Tiny;
 
 use constant { INSTRUCTS => 0, OS => 1, BASEDIR => 2 };
 
 sub new {
     return bless [
-        ( -e $0 . '.yml' ) ? YAML::Tiny->read( $0 . '.yml' )->[0] : [], "$^O",
+        ( -e $0 . '.yml' ) ?  LoadFile ( $0 . '.yml' ) : [],
+        "$^O",
         path($0)->parent
       ],
       shift;
