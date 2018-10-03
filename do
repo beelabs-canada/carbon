@@ -4,6 +4,8 @@ use common::sense;
 use HTTP::Tiny;
 use Data::Dmp;
 
+our $VERSION = '1.0 alpha';
+
 sub new {
     return bless [ Carbon::Enviroment->new ], shift;
 }
@@ -39,9 +41,14 @@ sub exec {
 # ---------------------------------------
 (
     sub {
-
+        say "   ##########################################";
+        say "   #   Carbon Runner ($VERSION)";
+        say "   #   \@author Mario Bonito";
+        say "   ##########################################";
+        
         Carbon->new()->run();
-
+        
+        say "   ...completed (OK)";
     }
 )->()
   if not caller();
@@ -99,17 +106,20 @@ sub do {
       ( $self->[0], $self->[1]->{'uri'}, Path::Tiny->tempdir() );
 
     my $archive = $temp->child( basename($uri) );
-
+    
+    say "   [pluck] downloading $uri";
+    
     $http->mirror( $uri, $archive->stringify );
 
     my $content = $self->extract($archive);
 
     foreach my $resource ( $self->resources ) {
+        say "     (moving) $resource->{from} -> $resource->{to}";
         my ( $from, $to ) = (
             $content->child( $resource->{from} )->absolute,
             $basedir->child( $resource->{to} )->absolute
         );
-
+        
         $from->move(
             ( $from->is_dir() )
             ? $to->stringify
@@ -121,10 +131,11 @@ sub do {
 sub resources { @{ shift->[1]->{'resources'} } }
 
 sub extract {
-    my ( $self, $archive ) = @_;
+    my ( $self, $file ) = @_;
 
-    my $ae = Archive::Extract->new( archive => $archive->stringify );
-    $ae->extract( to => $archive->parent->stringify );
+    my $ae = Archive::Extract->new( archive => $file->stringify );
+    
+    $ae->extract( to => $file->parent->stringify );
 
     return Path::Tiny::path( $ae->extract_path );
 }
